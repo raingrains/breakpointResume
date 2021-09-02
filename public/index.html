@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+  <style>
+    progress::-webkit-progress-bar {
+      background: #ededed;
+      border-radius: 10px;
+    }
+
+    progress::-webkit-progress-value {
+      background: greenyellow;
+      border-radius: 10px;
+    }
+    progress{
+      height: 20px;
+      border: 1px solid blueviolet;
+      border-radius: 10px;
+    }
+    
+    ul{
+      list-style: none;
+    }
+    ul>li{
+      margin-bottom: 10px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>断点续传-上传</h1>
+
+  <ul style="list-style: none;">
+    <li>
+      <label for="">检验文件进度：</label>
+      <progress  id="checkOutProgress" value='0' max='100'></progress>
+      <span  id="checkOutProgressValue">0%</span>
+
+    </li>
+    <li>
+      <label for="">上传文件进度：</label>
+      <progress  id="progress" value='0' max='100'></progress>
+      <span  id="progressValue">0%</span>
+
+    </li>
+    <li>
+      <input type="file" id="uploader">
+    </li>
+  </ul>
+
+  <script src="https://unpkg.com/crypto-js@4.1.1/crypto-js.js"></script>
+  <script src="./lib/spark-md5.min.js"></script>
+  <script src="./lib/md5.min.js"></script>
+  <script src="https://cdn.bootcdn.net/ajax/libs/axios/0.21.1/axios.min.js"></script>
+
+  <!-- <script type="module" src="./index.js"></script> -->
+  <script>
+    const uploader = document.getElementById('uploader')
+    const checkOutProgress = document.getElementById('checkOutProgress')
+    const checkOutProgressValue = document.getElementById('checkOutProgressValue')
+    const progress = document.getElementById('progress')
+    const progressValue = document.getElementById('progressValue')
+    
+    let chunkSize = 100 * 1024 * 1024 // 每个切片的大小
+    let fileSize = 0 // 文件大小
+    let file = null // 文件
+    let hasUploaded = 0 // 已经上传的数据
+    let chunks = 0 // 切片的总数
+    uploader.onchange = async function () {
+      file = this.files[0]
+      console.log(file);
+      fileSize = file.size;
+      progress.max = fileSize + 100
+      checkOutProgress.value = 0
+      checkOutProgressValue.innerText = '0%'
+      progressValue.innerText = '0%'
+      progress.value = 0
+      // handleUpload(file)  // 处理上传
+    }
+
+  async  function handleUpload(file) {
+      // 获取文件的MD5值
+      const fileMd5Value = await md5File(file)
+      console.log(fileMd5Value);
+      // 检查文件chunk
+      const result = await checkChunk(file.name,fileMd5Value)
+      // 若文件存在
+      if(result.file){
+        progress.value = fileSize
+        alert('文件已秒传')
+        return
+      }
+
+      // 上传chunk
+      await uploadChunk(fileMd5Value,result.chunkList)
+
+      // 通知服务端合并chunk文件
+      await axios.post('http://192.168.2.12:4000/api/merge',{
+        fileName:file.name,
+        size:fileSize,
+        md5:fileMd5Value,
+        total:chunks
+      }).then(res=>{
+        console.log(res);
+        if(res.data.code===200){
+          progress.value = fileSize + 100
+          progressValue.innerText = '100.0%'
+        }
+      })
+
+      /**
+       * 获取文件的MD5值
+       * 使用sparkMD5 是因为大文件的二进制内容太多，直接生成md5会死掉，所以需要分段生成
+       */
+      
+      function md5File(file) {
+        let currentChunk = 0
+        let chunkSize = 100 * 1024 *1024
+        // let chunkSize = fileSize/100
+        // let chunks = 100
+        chunks = Math.ceil(fileSize / chunkSize)
+        checkOutProgress.max = chunks
+        
+        return new Promise(async (resolve, reject) => {
+          const reader = new FileReader()
+          const spark = new SparkMD5()
+          // const spark = new SparkMD5.ArrayBuffer()
+        
+          reader.onload = function (e) {
+            if (currentChunk < chunks) {
+              // 保证和后端生成的md5相同
+              spark.appendBinary(e.target.result)
+              currentChunk++
+                loadNext();
+            } else {
+                let result = spark.end()
+                resolve(result)
+            }
+          }
+          function loadNext() {
+            var start = currentChunk * chunkSize,
+            end = ((start + chunkSize) >= file.size) ? file.size : start + chunkSize;
+            checkOutProgress.value = currentChunk
+            checkOutProgressValue.innerText = ((currentChunk/chunks)*100).toFixed(1)+'%'
+              // 获取文件原始的二进制内容
+              // reader.readAsBinaryString(file)
+              reader.readAsBinaryString(file.slice(start,end))
+              // 获取文件的ArrayBuffer
+              // reader.readAsArrayBuffer(file.slice(start,end))
+          }
+          loadNext();
+        })
+      }
+      /**
+       * 校验文件的MD5
+       */
+      function checkChunk(fileName,fileMd5Value) {
+        return axios.get('http://192.168.2.12:4000/api/check/file',{
+          params:{
+            fileName,
+            fileMd5Value
+          }
+        }).then(res=>{
+          return res.data
+        })
+      }
+
+    async function uploadChunk(fileMd5Value,chunkList){
+      chunks = Math.ceil(fileSize / chunkSize)
+      hasUploaded = chunkList.length
+      let arr = []
+      arr = arr.concat('1'.repeat(chunks).split(''))
+      
+
+      // 依次上传
+      for(let i=0;i<arr.length;i++){
+        if(chunkList.indexOf(String(i))===-1){
+          let end = (i + 1) * chunkSize >= file.size ? file.size : (i + 1) * chunkSize
+          const formData = new FormData()
+          formData.append('index',i)
+          formData.append('file',file.slice(i*chunkSize,end))
+          formData.append('total',chunks)
+          formData.append('fileMd5Value',fileMd5Value)
+          await axios.create({timeout:0}).post('http://192.168.2.12:4000/api/upload',formData,{
+          onUploadProgress:(e)=>{
+            arr[i] = e.loaded
+            console.warn('arr',arr);
+            let sum = 0
+            arr.forEach(item=>{
+              if(typeof item==='number'){
+                sum += item
+              }
+            })
+            progress.value = sum
+            progressValue.innerText = (sum/(fileSize+fileSize*0.002)*100).toFixed(1)+'%'
+            console.log(e.loaded,progress.value);
+            }
+          })
+        }else{
+          progress.value = (i+1) * chunkSize
+          arr[i] =i!==arr.length-1? chunkSize:0
+          let sum = 0
+          arr.forEach(item=>{
+            if(typeof item==='number'){
+              sum += item
+            }
+          })
+          progress.value = sum
+          progressValue.innerText =( sum/(fileSize+fileSize*0.002)*100).toFixed(1)+'%'
+          console.log(i,'切片已上传,添加上传进度');
+        }
+      }
+
+      
+
+      // 并发上传
+
+      // await Promise.all(arr.map((item,i)=>{
+      //   if(chunkList.indexOf(String(i))===-1){
+      //     let end = (i + 1) * chunkSize >= file.size ? file.size : (i + 1) * chunkSize
+      //     const formData = new FormData()
+      //     formData.append('index',i)
+      //     formData.append('file',file.slice(i*chunkSize,end))
+      //     formData.append('total',chunks)
+      //     formData.append('fileMd5Value',fileMd5Value)
+      //     return axios.post('/api/upload',formData,{
+      //      onUploadProgress:(e)=>{
+      //        arr[i] = e.loaded
+      //        console.warn('arr',arr);
+      //        console.log(progress.value);
+      //        let sum = 0
+      //        arr.forEach(item=>{
+      //          if(typeof item==='number'){
+      //            sum += item
+      //          }
+      //        })
+      //        progress.value = sum
+      //       }
+      //     })
+      //    }
+      // }))
+    }
+
+      setTimeout(() => {
+        console.log('执行结束,清除value');
+        uploader.value = null
+      }, 1500);
+    }
+  </script>
+</body>
+
+</html>
