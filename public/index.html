@@ -79,7 +79,7 @@
       checkOutProgressValue.innerText = '0%'
       progressValue.innerText = '0%'
       progress.value = 0
-      // handleUpload(file)  // 处理上传
+      handleUpload(file)  // 处理上传
     }
 
   async  function handleUpload(file) {
@@ -99,7 +99,7 @@
       await uploadChunk(fileMd5Value,result.chunkList)
 
       // 通知服务端合并chunk文件
-      await axios.post('http://192.168.2.12:4000/api/merge',{
+      await axios.post('/api/merge',{
         fileName:file.name,
         size:fileSize,
         md5:fileMd5Value,
@@ -159,7 +159,7 @@
        * 校验文件的MD5
        */
       function checkChunk(fileName,fileMd5Value) {
-        return axios.get('http://192.168.2.12:4000/api/check/file',{
+        return axios.get('/api/check/file',{
           params:{
             fileName,
             fileMd5Value
@@ -185,7 +185,7 @@
           formData.append('file',file.slice(i*chunkSize,end))
           formData.append('total',chunks)
           formData.append('fileMd5Value',fileMd5Value)
-          await axios.create({timeout:0}).post('http://192.168.2.12:4000/api/upload',formData,{
+          await axios.create({timeout:0}).post('/api/upload',formData,{
           onUploadProgress:(e)=>{
             arr[i] = e.loaded
             console.warn('arr',arr);
